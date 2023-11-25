@@ -6,6 +6,7 @@ import textwrap
 
 import requests
 from bs4 import BeautifulSoup
+from pathlib import Path
 from rust_demangler import demangle
 
 EXTERNS = set()
@@ -79,12 +80,14 @@ DEFINES = (
 )
 
 
-def get_lib_funcs(lib, ver):
+def get_lib_funcs(lib: str, ver: str) -> str: 
     '''Get all functions html path'''
 
     url = 'https://docs.rs/{}/{}'
 
     r = requests.get(url.format(lib, ver) + '/#functions')
+    if r.status_code != 200:
+        return
 
     soup = BeautifulSoup(r.text, 'html.parser')
 
@@ -116,7 +119,7 @@ def get_lib_funcs_code(funcs, lib, ver):
     return full_code
 
 
-def update_func(lib, func_code, func):
+def update_func(lib: str, func_code: str, func: str) -> str:
     '''Change some function code to be called later in lib.rs'''
 
     for i, code in enumerate(func_code):
@@ -164,16 +167,20 @@ def get_func_code(lib: str, ver: str, func=''):
 
     return None
 
-def get_example(url):
-    r = requests.get(url)
-    soup = BeautifulSoup(r.text, 'html.parser')
 
+def get_example(url: str) -> tuple:
+    r = requests.get(url)
+    if r.status_code != 200:
+        return
+
+    soup = BeautifulSoup(r.text, 'html.parser')
     examples = soup.find_all(
         'pre', attrs={'class': 'rust rust-example-rendered'})
 
     return soup, examples
 
-def check_template(soup: BeautifulSoup, lib):
+
+def check_template(soup: BeautifulSoup, lib: str):
     fn_template = soup.find_all('pre', attrs={'class': 'rust fn'})
 
     fn_regex = re.compile(r'([\w\d]|>)\((.*)\)( ->|\n|$)')
@@ -280,8 +287,9 @@ def check_compile():
 
 
 def cargo_check(code, func):
+    path = Path(RUST_PROJ_PATH, RUST_PROJ_NAME, 'src/lib.rs')
 
-    with open(f'{RUST_PROJ_PATH}/{RUST_PROJ_NAME}/src/lib.rs', 'w') as rust_lib:
+    with open(path, 'w') as rust_lib:
         rust_lib.write(code)
 
     if ARCH:
@@ -374,8 +382,9 @@ def gen_cargo_toml(libs):
         toml.write(cargo_template % deps)
 
 
-def cargo_new():
-    if os.path.isdir(f'{RUST_PROJ_PATH}/{RUST_PROJ_NAME}'):
+def cargo_new() -> None:
+    path = Path(RUST_PROJ_PATH, RUST_PROJ_NAME)
+    if os.path.isdir(path):
         return
 
     os.chdir(RUST_PROJ_PATH)
@@ -383,26 +392,29 @@ def cargo_new():
 
 
 def create_sig_ida():
-    target = f'{RUST_PROJ_PATH}/{RUST_PROJ_NAME}/target/{ARCH}/release'
+    target = Path(RUST_PROJ_PATH, RUST_PROJ_NAME, 'target', ARCH, 'release')
 
     if os.name == 'nt':
         libname = f'{RUST_PROJ_NAME}.lib'
     else:
         libname = f'lib{RUST_PROJ_NAME}.a'
+    lib_path = Path(RUST_PROJ_PATH, RUST_PROJ_NAME, 'target', ARCH, 'release',
+                    libname)
 
-    os.system(f'{PAT_GENERATOR_PATH} {target}/{libname} {target}/{libname}.pat')
+    os.system(f'{PAT_GENERATOR_PATH} {lib_path} {lab_path}.pat')
 
-    rust_demangle(f'{target}/{libname}.pat')
+    rust_demangle(f'{lip_path}.pat')
 
-    cmd = f'{SIGMAKE_PATH} {target}/{libname}.pat {target}/{libname}.sig'
-    proc = subprocess.run(cmd.split(), capture_output=True)
+    cmd = [SIGMAKE_PATH, '{lip_path}.pat' , f'{lib_path}.sig']
+    proc = subprocess.run(cmd, capture_output=True)
 
     if b'COLLISIONS' in proc.stderr:
-        exc = open(f'{target}/{libname}.exc').readlines()[4:]
+        exc = open(f'{lib_path}.exc').readlines()[4:]
 
-        with open(f'{target}/{libname}.exc', 'w') as sigexc:
+        with open(f'{lib_path}.exc', 'w') as sigexc:
             sigexc.write('\n'.join(exc))
             subprocess.run(cmd.split())
+
 
 def create_sig_rizin():
     target = f'{RUST_PROJ_PATH}/{RUST_PROJ_NAME}/target/{ARCH}/release'
@@ -415,6 +427,7 @@ def create_sig_rizin():
     # cmd = f'rz-sign -a -o {target}/{libname}.sig {target}/{libname}'
     cmd = f'rizin -A -qc "zfc {target}/{libname}.sig" {target}/{libname}'
     os.system(cmd)
+
 
 def rust_demangle(target):
     mangled_regex = re.compile(r'_ZN[\w\d_$\.]+E'.encode())
@@ -430,7 +443,8 @@ def rust_demangle(target):
     with open(target, 'wb') as demangled_file:
         demangled_file.write(mangled_content)
 
-def parse_config(conf_path):
+
+def parse_config(conf_path: str) -> None:
     config = configparser.ConfigParser()
     config.read(conf_path)
 
@@ -440,20 +454,22 @@ def parse_config(conf_path):
     global SIGMAKE_PATH
     global ARCH
 
-    RUST_PROJ_NAME = config['Project']['name']
-    RUST_PROJ_PATH = config['Project']['path']
+    RUST_PROJ_NAME = config.get('Project', 'name')
+    RUST_PROJ_PATH = config.get('Project', 'path')
     
     try:
-        PAT_GENERATOR_PATH = config['Generator']['pat']
-        SIGMAKE_PATH = config['Generator']['sigmake']
+        PAT_GENERATOR_PATH = config.get('Generator', 'pat')
+        SIGMAKE_PATH = config.get('Generator', 'sigmake')
 
-    except:
-        pass
+    except Exception as e:
+        print(f'error: {e}')
 
-    ARCH = config['Target']['arch']
+    ARCH = config.get('Target', 'arch')
 
-def rlib_to_sig(libs, target='ida'):
-    parse_config(r'config.ini')
+
+def rlib_to_sig(libs: set[tuple[str, str]], target='ida') -> None:
+    
+    parse_config('config.ini')
 
     all_funcs = list()
     all_modules = list()
@@ -482,8 +498,11 @@ def rlib_to_sig(libs, target='ida'):
         create_sig_rizin()
 
 
-# if __name__ == '__main__':
-#     libs = set([('cesu8', '1.1.0'), ('memchr', '2.4.1'), ('proc-maps', '0.2.0'), ('log', '0.4.1'), ('lazy_static', '1.4.0'), ('rustc-demangle', '0.1.2'),
-#                 ('serde_json', '1.0.7'), ('aho-corasick', '0.7.1'), ('regex', '1.5.4'), ('regex-syntax', '0.6.2'), ('miniz_oxide', '0.4.0'), ('rand', '0.8.4')])
-
-#     rlib_to_sig(libs)
+if __name__ == '__main__':
+    libs = set([('cesu8', '1.1.0'), ('memchr', '2.4.1'),
+                ('proc-maps', '0.2.0'), ('log', '0.4.1'),
+                ('lazy_static', '1.4.0'), ('rustc-demangle', '0.1.2'),
+                ('serde_json', '1.0.7'), ('aho-corasick', '0.7.1'),
+                ('regex', '1.5.4'), ('regex-syntax', '0.6.2'),
+                ('miniz_oxide', '0.4.0'), ('rand', '0.8.4')])
+    rlib_to_sig(libs)
